@@ -5,19 +5,11 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
 	"math/rand"
-	"os"
 	"rabbitmq/mq"
 	"rabbitmq/utils"
 	"strconv"
-	"strings"
 	"time"
 )
-
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Fatalf("%s: %s", msg, err)
-	}
-}
 
 func randomString(l int) string {
 	bytes := make([]byte, l)
@@ -31,23 +23,12 @@ func randInt(min int, max int) int {
 	return min + rand.Intn(max-min)
 }
 
-func fibonacciRPC(n int, ch *amqp.Channel) (res int, err error) {
+func fibonacciRPC(input string) (res int, err error) {
+	ch := mq.GetChannel()
+	defer ch.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	//2.声明持久化队列
-	q, err := GetQuery(ch)
+	q, err := GetQuery(ch, "", true)
 	utils.FailOnError(err, "无法声明队列")
-
-	q, err = ch.QueueDeclare(
-		"",    // name
-		false, // durable
-		false, // delete when unused
-		true,  // exclusive
-		false, // noWait
-		nil,   // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
 
 	msgs, err := ch.Consume(
 		q.Name, // queue
@@ -58,9 +39,12 @@ func fibonacciRPC(n int, ch *amqp.Channel) (res int, err error) {
 		false,  // no-wait
 		nil,    // args
 	)
-	failOnError(err, "Failed to register a consumer")
+	utils.FailOnError(err, "消费者注册失败")
 
 	corrId := randomString(32)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	err = ch.PublishWithContext(ctx,
 		"",          // exchange
@@ -71,14 +55,14 @@ func fibonacciRPC(n int, ch *amqp.Channel) (res int, err error) {
 			ContentType:   "text/plain",
 			CorrelationId: corrId,
 			ReplyTo:       q.Name,
-			Body:          []byte(strconv.Itoa(n)),
+			Body:          []byte(input),
 		})
-	failOnError(err, "Failed to publish a message")
+	utils.FailOnError(err, "发布消息失败")
 
 	for d := range msgs {
 		if corrId == d.CorrelationId {
 			res, err = strconv.Atoi(string(d.Body))
-			failOnError(err, "Failed to convert body to integer")
+			utils.FailOnError(err, "无法将正文转换为整数")
 			break
 		}
 	}
@@ -88,29 +72,12 @@ func fibonacciRPC(n int, ch *amqp.Channel) (res int, err error) {
 
 func Client() {
 	rand.Seed(time.Now().UTC().UnixNano())
-	ch := mq.GetChannel()
-	defer ch.Close()
 	utils.ProducerRelease(
-		func(input string) {
-			n, _ := strconv.Atoi(input)
-			log.Printf(" [x] Requesting fib(%d)", n)
-			res, err := fibonacciRPC(n, ch)
-			failOnError(err, "Failed to handle RPC request")
-
-			log.Printf(" [.] Got %d", res)
+		func(s string) {
+			res, err := fibonacciRPC(s)
+			utils.FailOnError(err, "无法处理 RPC 请求")
+			log.Printf(" [.] 收到服务器返回结果 %d", res)
 		},
 	)
 
-}
-
-func bodyFrom(args []string) int {
-	var s string
-	if (len(args) < 2) || os.Args[1] == "" {
-		s = "30"
-	} else {
-		s = strings.Join(args[1:], " ")
-	}
-	n, err := strconv.Atoi(s)
-	failOnError(err, "Failed to convert arg to integer")
-	return n
 }

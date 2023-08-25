@@ -2,7 +2,7 @@ package main
 
 import (
 	"rabbitmq/mq"
-	"rabbitmq/pub_sub"
+	"rabbitmq/rpc"
 )
 
 func main() {
@@ -12,7 +12,11 @@ func main() {
 	//work_queues.Producer()
 	//work_queues.Consumer()
 	//pub_sub.Producer()
-	pub_sub.Consumer()
+	//pub_sub.Consumer()
+	//routing.Producer()
+	//routing.Consumer()
 	//rpc.Client()
-	//rpc.Server()
+	rpc.Server()
+	//topic.Producer()
+	//topic.Consumer()
 }

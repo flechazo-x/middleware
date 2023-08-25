@@ -1,23 +1,32 @@
 package rpc
 
 import (
+	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
 	"rabbitmq/mq"
 	"rabbitmq/utils"
 	"strconv"
+	"time"
 )
 
+func square(n int) int {
+	return n * n
+}
+
 func Server() {
-	//1.获取链接通道
 	ch := mq.GetChannel()
 	defer ch.Close()
-	//2.声明队列
-	q, err := GetQuery(ch)
+
+	q, err := GetQuery(ch, "rpc_queue", false)
 	utils.FailOnError(err, "无法声明队列")
 
-	err = ch.Qos(1, 0, false)
-	utils.FailOnError(err, "未能设置 QoS")
+	err = ch.Qos(
+		1,     // prefetch count
+		0,     // prefetch size
+		false, // global
+	)
+	utils.FailOnError(err, "设置QoS失败")
 
 	msgs, err := ch.Consume(
 		q.Name, // queue
@@ -28,41 +37,35 @@ func Server() {
 		false,  // no-wait
 		nil,    // args
 	)
-	utils.FailOnError(err, "无法消费消息")
+	utils.FailOnError(err, "消费者注册失败")
+
 	var forever chan struct{}
+
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		for d := range msgs {
 			n, err := strconv.Atoi(string(d.Body))
-			utils.FailOnError(err, "Failed to convert body to integer")
+			utils.FailOnError(err, "无法将正文转换为整数")
 
-			log.Printf(" [.] fib(%d)", n)
+			log.Printf(" [.] 计算请求参数(%d)的平方", n)
+			response := square(n)
 
-			err = ch.PublishWithContext(nil,
-				"",        // 交换
-				d.ReplyTo, // 路由键
-				false,     // 强制
-				false,     // 立即
+			err = ch.PublishWithContext(ctx,
+				"",        // exchange
+				d.ReplyTo, // routing key
+				false,     // mandatory
+				false,     // immediate
 				amqp.Publishing{
 					ContentType:   "text/plain",
 					CorrelationId: d.CorrelationId,
-					Body:          []byte(strconv.Itoa(fib(n))),
+					Body:          []byte(strconv.Itoa(response)),
 				})
-			utils.FailOnError(err, "Failed to publish a message")
+			utils.FailOnError(err, "发布消息失败")
+
 			_ = d.Ack(false)
 		}
 	}()
+	log.Printf(" [*] 等待 RPC 请求")
 	<-forever
 }
-
-// 斐波那契数列
-func fib(n int) int {
-	if n == 0 {
-		return 0
-	} else if n == 1 {
-		return 1
-	} else {
-		return fib(n-1) + fib(n-2)
-	}
-}
-
-//go c mysql redis json/protobuf rabbitmq kafaka es gin pprof
